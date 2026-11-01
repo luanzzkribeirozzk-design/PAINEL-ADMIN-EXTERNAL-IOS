@@ -1,0 +1,10 @@
+{
+  "name": "PAINEL ADMINISTRATIVO — ZAYRON STORE",
+  "short_name": "Painel Admin",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080b12",
+  "theme_color": "#080b12",
+  "lang": "pt-BR",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
