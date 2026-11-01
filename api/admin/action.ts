@@ -21,17 +21,17 @@ export default async function handler(req: Request, res: Response) {
     if (action === 'generateLicense') {
       const days = Number(payload.days)
       const devices = Number(payload.devices)
+      const quantity = Math.min(100, Math.max(1, Number(payload.quantity ?? 1)))
       const cost = costs[days]
-      if (!cost || ![1, 2, 3].includes(devices)) throw new Error('DADOS_INVALIDOS')
+      if (!cost || !Number.isInteger(quantity) || ![1, 2].includes(devices)) throw new Error('DADOS_INVALIDOS')
       const prefix = normalizePrefix(payload.prefix ?? 'KEY')
       const idempotency = safeIdempotency(first(req.headers['idempotency-key'] ?? req.headers['Idempotency-Key']) ?? '')
       if (!idempotency) throw new Error('IDEMPOTENCY_OBRIGATORIA')
       const idempotencyRef = db.collection('adminIdempotency').doc(`${session.accessId}_${idempotency}`)
       const previous = await idempotencyRef.get()
       if (previous.exists) return json(res, 200, previous.data())
-      const rawKey = randomKey(prefix)
-      const licenseRef = db.collection('licenses').doc()
-      const keyHash = hashKey(rawKey)
+      const rawKeys = Array.from({ length: quantity }, () => randomKey(prefix))
+      const licenseRefs = rawKeys.map(() => db!.collection('licenses').doc())
       const flagRef = db.collection('systemFlags').doc('global')
       const result = await db.runTransaction(async transaction => {
         const currentSnapshot = await transaction.get(accessRef)
@@ -40,13 +40,14 @@ export default async function handler(req: Request, res: Response) {
         if (current.status !== 'active') throw new Error(current.status === 'blocked' ? 'ACCESS_BLOCKED' : 'ACCESS_UNAVAILABLE')
         if (flagSnapshot.data()?.globalPaused) throw new Error('SYSTEM_PAUSED')
         const credits = Number(current.credits ?? 0)
-        if (credits < cost) throw new Error('CREDITOS_INSUFICIENTES')
-        transaction.set(licenseRef, { keyHash, keyPreview: `${rawKey.slice(0, 6)}•••${rawKey.slice(-4)}`, createdBy: session.accessId, createdByAdminId: session.accessId, createdByRole: 'admin', durationDays: days, devices, devicesUsed: 0, status: 'ready', activatedAt: null, expiresAt: null, pausedRemainingMs: null, createdAt: now, updatedAt: now })
-        transaction.update(accessRef, { credits: credits - cost, prefix, updatedAt: now })
-        transaction.create(idempotencyRef, { ok: true, id: licenseRef.id, key: rawKey, cost, createdAt: now })
-        return { id: licenseRef.id, key: rawKey }
+        const totalCost = cost * quantity
+        if (credits < totalCost) throw new Error('CREDITOS_INSUFICIENTES')
+        rawKeys.forEach((rawKey, index) => transaction.set(licenseRefs[index], { keyHash: hashKey(rawKey), keyPreview: `${rawKey.slice(0, 6)}•••${rawKey.slice(-4)}`, createdBy: session.accessId, createdByAdminId: session.accessId, createdByRole: 'admin', durationDays: days, devices, devicesUsed: 0, status: 'ready', activatedAt: null, expiresAt: null, pausedRemainingMs: null, createdAt: now, updatedAt: now }))
+        transaction.update(accessRef, { credits: credits - totalCost, prefix, updatedAt: now })
+        transaction.create(idempotencyRef, { ok: true, ids: licenseRefs.map(ref => ref.id), keys: rawKeys, key: rawKeys[0], quantity, cost: totalCost, createdAt: now })
+        return { ids: licenseRefs.map(ref => ref.id), keys: rawKeys, key: rawKeys[0] }
       })
-      await audit('key Snapchat criada', session.accessId, result.id)
+      await audit(quantity > 1 ? `${quantity} keys Snapchat criadas` : 'key Snapchat criada', session.accessId, result.ids.join(','))
       return json(res, 200, { ok: true, ...result })
     }
 
