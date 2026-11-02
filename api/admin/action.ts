@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { db, FieldValue, Timestamp } from '../_lib/firebaseAdmin.js'
 import { assertOrigin, audit, errorStatus, hashKey, json, normalizePrefix, parseBody, randomKey, requireAdmin } from '../_lib/adminSecurity.js'
-import { decryptBulkKeys, encryptBulkKeys } from '../_lib/bulkEncryption.js'
+import { decryptBulkKeys, encryptBulkKeys, encryptKey } from '../_lib/bulkEncryption.js'
 
 type Request = { method?: string; body: unknown; headers: Record<string, string | string[] | undefined> }
 type Response = { setHeader: (name: string, value: string | string[]) => void; status: (code: number) => { json: (body: unknown) => void } }
@@ -44,7 +44,7 @@ export default async function handler(req: Request, res: Response) {
         const credits = Number(current.credits ?? 0)
         const totalCost = cost * quantity
         if (credits < totalCost) throw new Error('CREDITOS_INSUFICIENTES')
-        rawKeys.forEach((rawKey, index) => transaction.set(licenseRefs[index], { keyHash: hashKey(rawKey), keyPreview: `${rawKey.slice(0, 6)}•••${rawKey.slice(-4)}`, createdBy: session.accessId, createdByAdminId: session.accessId, createdByRole: 'admin', durationDays: days, devices, devicesUsed: 0, status: 'ready', activatedAt: null, expiresAt: null, pausedRemainingMs: null, createdAt: now, updatedAt: now }))
+        rawKeys.forEach((rawKey, index) => transaction.set(licenseRefs[index], { keyHash: hashKey(rawKey), encryptedKey: encryptKey(rawKey), keyPreview: `${rawKey.slice(0, 6)}•••${rawKey.slice(-4)}`, createdBy: session.accessId, createdByAdminId: session.accessId, createdByRole: 'admin', durationDays: days, devices, devicesUsed: 0, status: 'ready', activatedAt: null, expiresAt: null, pausedRemainingMs: null, createdAt: now, updatedAt: now }))
         transaction.update(accessRef, { credits: credits - totalCost, prefix, updatedAt: now })
         if (bulkRef) transaction.set(bulkRef, { ownerType: 'admin', ownerId: session.accessId, encryptedKeys: encryptBulkKeys(rawKeys), count: quantity, durationDays: days, devices, createdAt: now, createdBy: session.accessId })
         transaction.create(idempotencyRef, { ok: true, ids: licenseRefs.map(ref => ref.id), keys: rawKeys, key: rawKeys[0], quantity, cost: totalCost, createdAt: now })
