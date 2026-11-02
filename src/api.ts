@@ -27,5 +27,5 @@ export function logout() { return request<{ ok: true }>('/api/admin/logout', { m
 export function runAdminAction(action: string, payload: Record<string, unknown> = {}) {
   const headers: Record<string, string> = {}
   if (action === 'generateLicense') headers['Idempotency-Key'] = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
-  return request<{ ok: true; key?: string; id?: string }>('/api/admin/action', { method: 'POST', headers, body: JSON.stringify({ action, payload }) })
+  return request<{ ok: true; key?: string; keys?: string[]; id?: string }>('/api/admin/action', { method: 'POST', headers, body: JSON.stringify({ action, payload }) })
 }

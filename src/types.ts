@@ -44,9 +44,18 @@ export interface ActivityEvent {
   createdAt: string | null
 }
 
+export interface BulkHistoryEntry {
+  id: string
+  count: number
+  durationDays: number
+  devices: number
+  createdAt: string | null
+}
+
 export interface DashboardData {
   admin: AdminProfile
   licenses: AdminLicense[]
   events: ActivityEvent[]
+  bulkHistory: BulkHistoryEntry[]
   globalPaused: boolean
 }

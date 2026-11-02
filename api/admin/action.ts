@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { db, FieldValue, Timestamp } from '../_lib/firebaseAdmin.js'
 import { assertOrigin, audit, errorStatus, hashKey, json, normalizePrefix, parseBody, randomKey, requireAdmin } from '../_lib/adminSecurity.js'
+import { decryptBulkKeys, encryptBulkKeys } from '../_lib/bulkEncryption.js'
 
 type Request = { method?: string; body: unknown; headers: Record<string, string | string[] | undefined> }
 type Response = { setHeader: (name: string, value: string | string[]) => void; status: (code: number) => { json: (body: unknown) => void } }
@@ -32,6 +33,7 @@ export default async function handler(req: Request, res: Response) {
       if (previous.exists) return json(res, 200, previous.data())
       const rawKeys = Array.from({ length: quantity }, () => randomKey(prefix))
       const licenseRefs = rawKeys.map(() => db!.collection('licenses').doc())
+      const bulkRef = quantity > 1 ? db.collection('bulkKeyBatches').doc() : null
       const flagRef = db.collection('systemFlags').doc('global')
       const result = await db.runTransaction(async transaction => {
         const currentSnapshot = await transaction.get(accessRef)
@@ -44,11 +46,22 @@ export default async function handler(req: Request, res: Response) {
         if (credits < totalCost) throw new Error('CREDITOS_INSUFICIENTES')
         rawKeys.forEach((rawKey, index) => transaction.set(licenseRefs[index], { keyHash: hashKey(rawKey), keyPreview: `${rawKey.slice(0, 6)}•••${rawKey.slice(-4)}`, createdBy: session.accessId, createdByAdminId: session.accessId, createdByRole: 'admin', durationDays: days, devices, devicesUsed: 0, status: 'ready', activatedAt: null, expiresAt: null, pausedRemainingMs: null, createdAt: now, updatedAt: now }))
         transaction.update(accessRef, { credits: credits - totalCost, prefix, updatedAt: now })
+        if (bulkRef) transaction.set(bulkRef, { ownerType: 'admin', ownerId: session.accessId, encryptedKeys: encryptBulkKeys(rawKeys), count: quantity, durationDays: days, devices, createdAt: now, createdBy: session.accessId })
         transaction.create(idempotencyRef, { ok: true, ids: licenseRefs.map(ref => ref.id), keys: rawKeys, key: rawKeys[0], quantity, cost: totalCost, createdAt: now })
         return { ids: licenseRefs.map(ref => ref.id), keys: rawKeys, key: rawKeys[0] }
       })
       await audit(quantity > 1 ? `${quantity} keys Snapchat criadas` : 'key Snapchat criada', session.accessId, result.ids.join(','))
       return json(res, 200, { ok: true, ...result })
+    }
+
+    if (action === 'copyBulkBatch') {
+      const batchId = typeof payload.id === 'string' ? payload.id : ''
+      if (!batchId) throw new Error('ID_OBRIGATORIO')
+      const batch = await db.collection('bulkKeyBatches').doc(batchId).get()
+      if (!batch.exists || batch.data()?.ownerType !== 'admin' || batch.data()?.ownerId !== session.accessId) throw new Error('FORBIDDEN')
+      const keys = decryptBulkKeys(String(batch.data()?.encryptedKeys ?? ''))
+      await audit('lote de keys copiado', session.accessId, batchId)
+      return json(res, 200, { ok: true, keys })
     }
 
     const id = typeof payload.id === 'string' ? payload.id : ''
