@@ -35,7 +35,7 @@ export default async function handler(req: Request, res: Response) {
       } else transaction.update(deviceRef, { lastUsedAt: now })
     })
     await clearLoginRateLimit(rateKey)
-    setSession(res, accessRef.id)
+    setSession(res, accessRef.id, rawDevice)
     await audit('login', accessRef.id, accessRef.id)
     return json(res, 200, { ok: true, dashboard: await buildDashboard(accessRef.id) })
   } catch (error) {

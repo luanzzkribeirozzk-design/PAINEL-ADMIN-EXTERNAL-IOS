@@ -5,7 +5,7 @@ type HeaderValue = string | string[] | undefined
 type RequestLike = { headers: Record<string, HeaderValue>; body?: unknown }
 type ResponseLike = { setHeader: (name: string, value: string | string[]) => void; status: (code: number) => { json: (body: unknown) => void } }
 
-type Session = { accessId: string; issuedAt: number; expiresAt: number }
+type Session = { accessId: string; deviceHash: string; issuedAt: number; expiresAt: number }
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12
 const rateMemory = new Map<string, { count: number; resetAt: number }>()
@@ -27,6 +27,8 @@ export const clientIP = (req: RequestLike) => (header(req, 'x-forwarded-for') ||
 export const deviceId = (req: RequestLike) => header(req, 'x-admin-device').trim().slice(0, 200)
 
 export function assertOrigin(req: RequestLike) {
+  const fetchSite = header(req, 'sec-fetch-site')
+  if (fetchSite && ['cross-site', 'cross-origin'].includes(fetchSite)) throw new Error('ORIGIN_REJECTED')
   const origin = header(req, 'origin')
   if (!origin) return
   const configured = (process.env.ADMIN_ALLOWED_ORIGIN ?? '').split(',').map(value => value.trim()).filter(Boolean)
@@ -37,9 +39,9 @@ export function assertOrigin(req: RequestLike) {
 
 function cookieValue(req: RequestLike, name: string) { const cookie = header(req, 'cookie'); const found = cookie.split(';').map(value => value.trim()).find(value => value.startsWith(`${name}=`)); return found?.slice(name.length + 1) ?? '' }
 
-export function setSession(res: ResponseLike, accessId: string) {
+export function setSession(res: ResponseLike, accessId: string, rawDevice: string) {
   const issuedAt = Math.floor(Date.now() / 1000)
-  const payload = base64(JSON.stringify({ accessId, issuedAt, expiresAt: issuedAt + SESSION_TTL_SECONDS } satisfies Session))
+  const payload = base64(JSON.stringify({ accessId, deviceHash: hashValue('admin-device', rawDevice), issuedAt, expiresAt: issuedAt + SESSION_TTL_SECONDS } satisfies Session))
   const token = `${payload}.${sign(payload)}`
   const secure = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production'
   res.setHeader('Set-Cookie', `admin_session=${token}; Path=/; Max-Age=${SESSION_TTL_SECONDS}; HttpOnly; SameSite=None${secure ? '; Secure' : ''}`)
@@ -58,6 +60,8 @@ function readSession(req: RequestLike): Session {
 export async function requireAdmin(req: RequestLike) {
   if (!db) throw new Error(process.env.FIREBASE_PROJECT_ID ? 'BACKEND_INIT_FAILED' : 'BACKEND_NOT_CONFIGURED')
   const session = readSession(req)
+  const rawDevice = deviceId(req)
+  if (!rawDevice || session.deviceHash !== hashValue('admin-device', rawDevice)) throw new Error('SESSION_DEVICE_MISMATCH')
   const ref = db.collection('adminAccess').doc(session.accessId)
   const snapshot = await ref.get()
   if (!snapshot.exists) throw new Error('ACCESS_REVOKED')
@@ -79,6 +83,15 @@ export async function clearLoginRateLimit(key: string) { rateMemory.delete(key);
 export async function audit(action: string, actor: string, target: string, result = 'success') { if (db) await db.collection('auditEvents').add({ action: `Admin: ${action}`, actor, target, result, createdAt: FieldValue.serverTimestamp() }) }
 export function parseBody(body: unknown) { const value = typeof body === 'string' ? JSON.parse(body) : body; return value && typeof value === 'object' ? value as Record<string, unknown> : {} }
 
-export function json(res: ResponseLike, status: number, body: unknown) { res.setHeader('Cache-Control', 'no-store, private'); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('X-Robots-Tag', 'noindex, nofollow'); return res.status(status).json(body) }
-export function errorStatus(code: string) { if (['UNAUTHORIZED', 'SESSION_EXPIRED', 'ACCESS_REVOKED'].includes(code)) return 401; if (['ACCESS_BLOCKED', 'ACCESS_UNAVAILABLE', 'DEVICE_LIMIT', 'RATE_LIMITED', 'ORIGIN_REJECTED', 'SYSTEM_PAUSED', 'FORBIDDEN'].includes(code)) return 403; if (['DADOS_INVALIDOS', 'PREFIXO_INVALIDO', 'CREDITOS_INSUFICIENTES', 'IDEMPOTENCY_OBRIGATORIA'].includes(code)) return 400; return 500 }
+export function json(res: ResponseLike, status: number, body: unknown) {
+  res.setHeader('Cache-Control', 'no-store, private')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none')
+  return res.status(status).json(body)
+}
+export function errorStatus(code: string) { if (['UNAUTHORIZED', 'SESSION_EXPIRED', 'ACCESS_REVOKED', 'SESSION_DEVICE_MISMATCH'].includes(code)) return 401; if (['ACCESS_BLOCKED', 'ACCESS_UNAVAILABLE', 'DEVICE_LIMIT', 'RATE_LIMITED', 'ORIGIN_REJECTED', 'SYSTEM_PAUSED', 'FORBIDDEN'].includes(code)) return 403; if (['DADOS_INVALIDOS', 'PREFIXO_INVALIDO', 'CREDITOS_INSUFICIENTES', 'IDEMPOTENCY_OBRIGATORIA'].includes(code)) return 400; return 500 }
 export function randomKey(prefix: string) { const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const bytes = randomBytes(10); let suffix = ''; for (const byte of bytes) suffix += alphabet[byte % alphabet.length]; return `${prefix}-${suffix}` }
