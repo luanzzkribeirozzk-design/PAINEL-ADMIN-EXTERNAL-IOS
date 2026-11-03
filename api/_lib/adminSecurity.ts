@@ -9,6 +9,7 @@ type Session = { accessId: string; deviceHash: string; issuedAt: number; expires
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12
 const rateMemory = new Map<string, { count: number; resetAt: number }>()
+const requestRateMemory = new Map<string, { count: number; resetAt: number }>()
 const first = (value: HeaderValue) => Array.isArray(value) ? value[0] : value
 const header = (req: RequestLike, name: string) => first(req.headers[name] ?? req.headers[name.toLowerCase()] ?? req.headers[name.toUpperCase()]) ?? ''
 const sessionSecret = () => { const value = process.env.ADMIN_SESSION_SECRET; if (!value || value.length < 32) throw new Error('ADMIN_SESSION_SECRET_NOT_CONFIGURED'); return value }
@@ -62,12 +63,35 @@ export async function requireAdmin(req: RequestLike) {
   const session = readSession(req)
   const rawDevice = deviceId(req)
   if (!rawDevice || session.deviceHash !== hashValue('admin-device', rawDevice)) throw new Error('SESSION_DEVICE_MISMATCH')
+  enforceRequestRateLimit(req, session.accessId)
   const ref = db.collection('adminAccess').doc(session.accessId)
   const snapshot = await ref.get()
   if (!snapshot.exists) throw new Error('ACCESS_REVOKED')
   const data = snapshot.data() ?? {}
   if (data.status !== 'active') throw new Error(data.status === 'blocked' ? 'ACCESS_BLOCKED' : 'ACCESS_UNAVAILABLE')
   return { session, ref, data }
+}
+
+function enforceRequestRateLimit(req: RequestLike, accessId: string) {
+  const current = Date.now()
+  const key = hashValue('admin-request', `${accessId}:${clientIP(req)}:${deviceId(req)}`)
+  const previous = requestRateMemory.get(key)
+  const windowMs = 60_000
+  const maximum = 120
+  if (previous && previous.resetAt > current && previous.count >= maximum) {
+    throw new Error('RATE_LIMITED')
+  }
+  requestRateMemory.set(
+    key,
+    previous && previous.resetAt > current
+      ? { count: previous.count + 1, resetAt: previous.resetAt }
+      : { count: 1, resetAt: current + windowMs }
+  )
+  if (requestRateMemory.size > 10_000) {
+    for (const [entryKey, entry] of requestRateMemory) {
+      if (entry.resetAt <= current) requestRateMemory.delete(entryKey)
+    }
+  }
 }
 
 export async function loginRateLimit(key: string) {
@@ -91,6 +115,7 @@ export function json(res: ResponseLike, status: number, body: unknown) {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
   res.setHeader('X-Permitted-Cross-Domain-Policies', 'none')
+  res.setHeader('X-Download-Options', 'noopen')
   return res.status(status).json(body)
 }
 export function errorStatus(code: string) { if (['UNAUTHORIZED', 'SESSION_EXPIRED', 'ACCESS_REVOKED', 'SESSION_DEVICE_MISMATCH'].includes(code)) return 401; if (['ACCESS_BLOCKED', 'ACCESS_UNAVAILABLE', 'DEVICE_LIMIT', 'RATE_LIMITED', 'ORIGIN_REJECTED', 'SYSTEM_PAUSED', 'FORBIDDEN'].includes(code)) return 403; if (['DADOS_INVALIDOS', 'PREFIXO_INVALIDO', 'CREDITOS_INSUFICIENTES', 'IDEMPOTENCY_OBRIGATORIA'].includes(code)) return 400; return 500 }
