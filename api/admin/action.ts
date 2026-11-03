@@ -30,7 +30,20 @@ export default async function handler(req: Request, res: Response) {
       if (!idempotency) throw new Error('IDEMPOTENCY_OBRIGATORIA')
       const idempotencyRef = db.collection('adminIdempotency').doc(`${session.accessId}_${idempotency}`)
       const previous = await idempotencyRef.get()
-      if (previous.exists) return json(res, 200, previous.data())
+      if (previous.exists) {
+        const previousData = previous.data() ?? {}
+        const encryptedKeys = typeof previousData.keysCiphertext === 'string'
+          ? previousData.keysCiphertext
+          : ''
+        if (!encryptedKeys) throw new Error('IDEMPOTENCIA_EXPIRADA')
+        const replayKeys = decryptBulkKeys(encryptedKeys)
+        return json(res, 200, {
+          ok: true,
+          ids: previousData.ids ?? [],
+          keys: replayKeys,
+          key: replayKeys[0],
+        })
+      }
       const rawKeys = Array.from({ length: quantity }, () => randomKey(prefix))
       const licenseRefs = rawKeys.map(() => db!.collection('licenses').doc())
       const bulkRef = quantity > 1 ? db.collection('bulkKeyBatches').doc() : null
@@ -47,7 +60,7 @@ export default async function handler(req: Request, res: Response) {
         rawKeys.forEach((rawKey, index) => transaction.set(licenseRefs[index], { keyHash: hashKey(rawKey), encryptedKey: encryptKey(rawKey), keyPreview: `${rawKey.slice(0, 6)}•••${rawKey.slice(-4)}`, createdBy: session.accessId, createdByAdminId: session.accessId, createdByRole: 'admin', durationDays: days, devices, devicesUsed: 0, status: 'ready', activatedAt: null, expiresAt: null, pausedRemainingMs: null, createdAt: now, updatedAt: now }))
         transaction.update(accessRef, { credits: credits - totalCost, prefix, updatedAt: now })
         if (bulkRef) transaction.set(bulkRef, { ownerType: 'admin', ownerId: session.accessId, encryptedKeys: encryptBulkKeys(rawKeys), count: quantity, durationDays: days, devices, createdAt: now, createdBy: session.accessId })
-        transaction.create(idempotencyRef, { ok: true, ids: licenseRefs.map(ref => ref.id), keys: rawKeys, key: rawKeys[0], quantity, cost: totalCost, createdAt: now })
+        transaction.create(idempotencyRef, { ok: true, ids: licenseRefs.map(ref => ref.id), keysCiphertext: encryptBulkKeys(rawKeys), quantity, cost: totalCost, createdAt: now })
         return { ids: licenseRefs.map(ref => ref.id), keys: rawKeys, key: rawKeys[0] }
       })
       await audit(quantity > 1 ? `${quantity} keys Snapchat criadas` : 'key Snapchat criada', session.accessId, result.ids.join(','))

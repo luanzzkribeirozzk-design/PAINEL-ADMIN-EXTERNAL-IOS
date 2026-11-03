@@ -118,5 +118,5 @@ export function json(res: ResponseLike, status: number, body: unknown) {
   res.setHeader('X-Download-Options', 'noopen')
   return res.status(status).json(body)
 }
-export function errorStatus(code: string) { if (['UNAUTHORIZED', 'SESSION_EXPIRED', 'ACCESS_REVOKED', 'SESSION_DEVICE_MISMATCH'].includes(code)) return 401; if (['ACCESS_BLOCKED', 'ACCESS_UNAVAILABLE', 'DEVICE_LIMIT', 'RATE_LIMITED', 'ORIGIN_REJECTED', 'SYSTEM_PAUSED', 'FORBIDDEN'].includes(code)) return 403; if (['DADOS_INVALIDOS', 'PREFIXO_INVALIDO', 'CREDITOS_INSUFICIENTES', 'IDEMPOTENCY_OBRIGATORIA'].includes(code)) return 400; return 500 }
+export function errorStatus(code: string) { if (['UNAUTHORIZED', 'SESSION_EXPIRED', 'ACCESS_REVOKED', 'SESSION_DEVICE_MISMATCH'].includes(code)) return 401; if (['ACCESS_BLOCKED', 'ACCESS_UNAVAILABLE', 'DEVICE_LIMIT', 'RATE_LIMITED', 'ORIGIN_REJECTED', 'SYSTEM_PAUSED', 'FORBIDDEN'].includes(code)) return 403; if (['DADOS_INVALIDOS', 'PREFIXO_INVALIDO', 'CREDITOS_INSUFICIENTES', 'IDEMPOTENCY_OBRIGATORIA', 'IDEMPOTENCIA_EXPIRADA'].includes(code)) return 400; return 500 }
 export function randomKey(prefix: string) { const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const bytes = randomBytes(10); let suffix = ''; for (const byte of bytes) suffix += alphabet[byte % alphabet.length]; return `${prefix}-${suffix}` }
