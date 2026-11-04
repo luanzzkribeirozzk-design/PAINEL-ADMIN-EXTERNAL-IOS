@@ -4,6 +4,13 @@ import { decryptKeyOr } from './bulkEncryption.js'
 
 type Request = { headers: Record<string, string | string[] | undefined> }
 const dateValue = (value: unknown) => value instanceof Timestamp ? value.toDate().toISOString() : typeof value === 'string' ? value : null
+const resolvedStatus = (value: FirebaseFirestore.DocumentData) => {
+  const status = String(value.status ?? 'ready')
+  const expiresAt = value.expiresAt?.toMillis?.()
+  if (status === 'active' && typeof expiresAt === 'number' && expiresAt <= Date.now()) return 'expired'
+  if (status === 'paused' && value.activatedAt && Number(value.pausedRemainingMs ?? 1) <= 0) return 'expired'
+  return status
+}
 
 export async function buildDashboard(accessId: string) {
   if (!db) throw new Error('BACKEND_NOT_CONFIGURED')
@@ -20,7 +27,7 @@ export async function buildDashboard(accessId: string) {
   const access = accessSnapshot.data() ?? {}
   const bindingsByLicense = new Map<string, FirebaseFirestore.DocumentData[]>()
   bindingsSnapshot.docs.forEach(doc => { const value = doc.data(); const list = bindingsByLicense.get(String(value.licenseId)) ?? []; list.push({ ...value, id: doc.id }); bindingsByLicense.set(String(value.licenseId), list) })
-  const licenses = licensesSnapshot.docs.map(doc => { const value = doc.data(); const bindings = (bindingsByLicense.get(doc.id) ?? []).map(binding => ({ id: binding.id, devicePreview: binding.devicePreview ?? null, ip: binding.ip ?? null, firstUsedAt: dateValue(binding.firstUsedAt), lastUsedAt: dateValue(binding.lastUsedAt) })); return { id: doc.id, key: value.encryptedKey ? decryptKeyOr(String(value.encryptedKey), value.keyPreview ?? value.key ?? '••••') : value.key ?? value.keyPreview ?? '••••', durationDays: Number(value.durationDays ?? 1), devices: Number(value.devices ?? 1), devicesUsed: Number(value.devicesUsed ?? bindings.length), status: value.status ?? 'ready', expiresAt: dateValue(value.expiresAt), activatedAt: dateValue(value.activatedAt), createdAt: dateValue(value.createdAt), lastUsedAt: dateValue(value.lastUsedAt ?? bindings[0]?.lastUsedAt), bindings } }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+  const licenses = licensesSnapshot.docs.map(doc => { const value = doc.data(); const bindings = (bindingsByLicense.get(doc.id) ?? []).map(binding => ({ id: binding.id, devicePreview: binding.devicePreview ?? null, ip: binding.ip ?? null, firstUsedAt: dateValue(binding.firstUsedAt), lastUsedAt: dateValue(binding.lastUsedAt) })); return { id: doc.id, key: value.encryptedKey ? decryptKeyOr(String(value.encryptedKey), value.keyPreview ?? value.key ?? '••••') : value.key ?? value.keyPreview ?? '••••', durationDays: Number(value.durationDays ?? 1), devices: Number(value.devices ?? 1), devicesUsed: Number(value.devicesUsed ?? bindings.length), status: resolvedStatus(value), expiresAt: dateValue(value.expiresAt), activatedAt: dateValue(value.activatedAt), createdAt: dateValue(value.createdAt), lastUsedAt: dateValue(value.lastUsedAt ?? bindings[0]?.lastUsedAt), bindings } }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
   const bulkHistory = bulkSnapshot.docs.map(doc => { const value = doc.data(); return { id: doc.id, count: Number(value.count ?? 0), durationDays: Number(value.durationDays ?? 0), devices: Number(value.devices ?? 1), createdAt: dateValue(value.createdAt) } }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
   return { admin: { id: accessId, keyPreview: access.keyPreview ?? 'KEY-••••', credits: Number(access.credits ?? 0), devices: Number(access.devices ?? 1), devicesUsed: Number(access.devicesUsed ?? 0), status: access.status ?? 'active', prefix: access.prefix ?? 'KEY', createdAt: dateValue(access.createdAt), lastUsedAt: dateValue(access.lastUsedAt) }, licenses, events: eventsSnapshot.docs.map(doc => { const value = doc.data(); return { id: doc.id, action: String(value.action ?? 'Operação'), target: String(value.target ?? ''), result: value.result ?? 'success', createdAt: dateValue(value.createdAt) } }), bulkHistory, globalPaused: Boolean(flagsSnapshot.data()?.globalPaused) }
 }
