@@ -77,6 +77,13 @@ export default async function handler(req: Request, res: Response) {
       return json(res, 200, { ok: true, keys })
     }
 
+    if (action === 'updatePrefix') {
+      const prefix = normalizePrefix(payload.prefix)
+      await accessRef.update({ prefix, updatedAt: now })
+      await audit('prefixo alterado', session.accessId, prefix)
+      return json(res, 200, { ok: true, prefix })
+    }
+
     const id = typeof payload.id === 'string' ? payload.id : ''
     if (!id) throw new Error('ID_OBRIGATORIO')
     const licenseRef = db.collection('licenses').doc(id)
@@ -107,13 +114,6 @@ export default async function handler(req: Request, res: Response) {
       const bindings = await db.collection('licenseDevices').where('licenseId', '==', id).get()
       const batch = db.batch(); bindings.docs.forEach(binding => batch.delete(binding.ref)); batch.delete(licenseRef); await batch.commit()
       return json(res, 200, { ok: true, deleted: true, id })
-    }
-
-    if (action === 'updatePrefix') {
-      const prefix = normalizePrefix(payload.prefix)
-      await accessRef.update({ prefix, updatedAt: now })
-      await audit('prefixo alterado', session.accessId, prefix)
-      return json(res, 200, { ok: true, prefix })
     }
 
     throw new Error('AÇÃO_NÃO_PERMITIDA')
